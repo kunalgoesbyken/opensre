@@ -120,10 +120,16 @@ def _run_sync(console: Console, args: list[str]) -> bool:
 
 
 def _flag_value(args: list[str], name: str) -> str | None:
-    """Return ``--name value`` from ``args``, or None."""
+    """Return ``--name value`` from ``args``, or None.
+
+    Raises ``ValueError`` when ``--name`` is last or followed by another flag,
+    so the next flag is never stored as the value.
+    """
     token = f"--{name}"
     for index, arg in enumerate(args):
-        if arg == token and index + 1 < len(args):
+        if arg == token:
+            if index + 1 >= len(args) or args[index + 1].startswith("--"):
+                raise ValueError(f"{token} requires a value")
             return args[index + 1]
         if arg.startswith(f"{token}="):
             return arg.split("=", 1)[1]
@@ -132,8 +138,15 @@ def _flag_value(args: list[str], name: str) -> str | None:
 
 def _run_setup(console: Console, args: list[str]) -> bool:
     """Write stored settings from flags (gateway-safe: no interactive prompts)."""
-    provider = _flag_value(args, "provider") or DEFAULT_REMOTE_SYNC_PROVIDER
-    bucket = _flag_value(args, "bucket")
+    try:
+        provider = _flag_value(args, "provider") or DEFAULT_REMOTE_SYNC_PROVIDER
+        bucket = _flag_value(args, "bucket")
+        prefix = _flag_value(args, "prefix") or DEFAULT_REMOTE_SYNC_PREFIX
+        region = _flag_value(args, "region") or ""
+        profile = _flag_value(args, "profile") or ""
+    except ValueError as exc:
+        console.print(f"[{ERROR}]{escape(str(exc))}[/]")
+        return True
     if not bucket or not bucket.strip():
         console.print(
             f"[{ERROR}]setup needs --bucket[/]. "
@@ -142,9 +155,6 @@ def _run_setup(console: Console, args: list[str]) -> bool:
             f"[{DIM}]Interactive prompts: opensre remote-sync setup[/]"
         )
         return True
-    prefix = _flag_value(args, "prefix") or DEFAULT_REMOTE_SYNC_PREFIX
-    region = _flag_value(args, "region") or ""
-    profile = _flag_value(args, "profile") or ""
     enabled = "--disabled" not in {a.lower() for a in args}
     config = save_remote_sync_settings(
         RemoteSyncSetupRequest(

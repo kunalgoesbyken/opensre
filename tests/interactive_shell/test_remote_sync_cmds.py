@@ -205,6 +205,53 @@ def test_setup_disabled_says_off_without_a_sync_suggestion(
     assert "remote-sync sync" not in out
 
 
+@pytest.mark.parametrize(
+    ("command", "flag"),
+    [
+        ("/remote-sync setup --provider vercel --bucket --prefix team/", "--bucket"),
+        ("/remote-sync setup --bucket real-bucket --region --profile prod", "--region"),
+        ("/remote-sync setup --bucket --disabled", "--bucket"),
+        ("/remote-sync setup --bucket real-bucket --prefix", "--prefix"),
+    ],
+)
+def test_setup_rejects_a_flag_without_a_value_and_saves_nothing(
+    command: str, flag: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from config.constants import paths as paths_mod
+
+    monkeypatch.setattr(paths_mod, "OPENSRE_HOME_DIR", tmp_path)
+    console, buf = _capture()
+
+    assert dispatch_slash(command, Session(), console) is True
+
+    out = buf.getvalue()
+    assert f"{flag} requires a value" in out
+    assert "settings saved" not in out
+    assert not (tmp_path / "config.yml").exists()
+
+
+def test_setup_still_reads_equals_values(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    import yaml
+
+    from config.constants import paths as paths_mod
+
+    monkeypatch.setattr(paths_mod, "OPENSRE_HOME_DIR", tmp_path)
+    console, buf = _capture()
+
+    assert (
+        dispatch_slash(
+            "/remote-sync setup --provider=vercel --bucket=team-store --prefix=", Session(), console
+        )
+        is True
+    )
+
+    assert "settings saved" in buf.getvalue()
+    stored = yaml.safe_load((tmp_path / "config.yml").read_text())["remote_sync"]
+    assert stored["provider"] == "vercel"
+    assert stored["bucket"] == "team-store"
+    assert stored["prefix"] == "opensre"
+
+
 def test_sync_error_is_caught(monkeypatch: pytest.MonkeyPatch) -> None:
     def _boom(**_kwargs: object) -> SyncReport:
         raise RemoteSyncConfigError("bad flags")
