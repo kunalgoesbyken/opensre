@@ -40,6 +40,59 @@ def test_a_weekday_field_fires_on_its_crontab_days(day_of_week: str, fires_on: s
     assert _fire_days(f"0 10 * * {day_of_week}") == fires_on
 
 
+def _fire_dates(cron: str, start: datetime, count: int) -> list[str]:
+    """The first ``count`` fire dates of ``cron`` from ``start``."""
+    trigger = build_cron_trigger(cron, "UTC")
+    dates: list[str] = []
+    fire = trigger.get_next_fire_time(None, start)
+    while fire is not None and len(dates) < count:
+        dates.append(f"{fire:%Y-%m-%d}")
+        fire = trigger.get_next_fire_time(fire, fire)
+    return dates
+
+
+@pytest.mark.parametrize(
+    ("cron", "fires_on"),
+    [
+        # The 1st of the month or any Monday, not only a Monday the 1st (2027-02-01).
+        ("0 9 1 * 1", ["2026-10-05", "2026-10-12", "2026-10-19", "2026-10-26", "2026-11-01"]),
+        # Friday the 13th style: the 13th or any Friday.
+        ("0 9 13 * 5", ["2026-10-09", "2026-10-13", "2026-10-16", "2026-10-23", "2026-10-30"]),
+        # A day both fields match fires once.
+        ("0 9 1-7 * 0", ["2026-10-04", "2026-10-05", "2026-10-06", "2026-10-07", "2026-10-11"]),
+    ],
+)
+def test_a_restricted_day_and_weekday_fire_on_either_like_crontab(
+    cron: str, fires_on: list[str]
+) -> None:
+    assert _fire_dates(cron, _SUNDAY_NOON - timedelta(hours=12), 5) == fires_on
+
+
+def test_the_month_still_limits_both_day_fields() -> None:
+    # June 1st or a Monday in June; never a Monday in another month.
+    assert _fire_dates("0 9 1 6 1", _SUNDAY_NOON, 3) == ["2027-06-01", "2027-06-07", "2027-06-14"]
+
+
+@pytest.mark.parametrize(
+    ("cron", "fires_on"),
+    [
+        # A field starting with ``*`` is unrestricted to crontab, even with a step,
+        # so the other field still has to match: the 1st only on even weekdays.
+        ("0 9 1 * */2", ["2026-11-01", "2026-12-01", "2027-04-01"]),
+        ("0 9 */2 * 1", ["2026-10-05", "2026-10-19", "2026-11-09"]),
+    ],
+)
+def test_a_star_day_field_keeps_both_fields_required(cron: str, fires_on: list[str]) -> None:
+    assert _fire_dates(cron, _SUNDAY_NOON, 3) == fires_on
+
+
+def test_a_restricted_day_and_weekday_are_both_validated() -> None:
+    with pytest.raises(ValueError, match="0-7"):
+        build_cron_trigger("0 10 1 * 8", "UTC")
+    with pytest.raises(ValueError, match="invalid cron expression"):
+        build_cron_trigger("0 10 32 * 1", "UTC")
+
+
 def test_a_weekday_number_above_7_is_rejected_before_it_is_stored() -> None:
     with pytest.raises(ValueError, match="0-7"):
         build_cron_trigger("0 10 * * 8", "UTC")

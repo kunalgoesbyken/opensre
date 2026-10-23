@@ -9,6 +9,9 @@ half a minute; a five-field line can never fire more than once per minute.
 Weekday numbers mean what they mean in crontab (0 and 7 are Sunday, 1 is
 Monday), although APScheduler 3.x counts from 0 = Monday; every trigger is
 built through :func:`build_cron_trigger`, which translates them.
+
+A line that restricts both ``day`` and ``day_of_week`` fires when either one
+matches, as in crontab, although an APScheduler ``CronTrigger`` requires both.
 """
 
 from __future__ import annotations
@@ -95,12 +98,26 @@ def _weekday_ranges(days: set[int]) -> list[str]:
     return ranges
 
 
+def _restricts_days(field: str) -> bool:
+    """Whether a ``day`` or ``day_of_week`` field limits the days, the way crontab reads it.
+
+    Crontab checks only the first character: ``*`` and ``*/2`` both count as
+    unrestricted, so a stepped field still combines with the other day field.
+    """
+    return not field.startswith("*")
+
+
 def build_cron_trigger(cron: str, timezone: str | None) -> Any:
-    """Build an APScheduler ``CronTrigger`` for a five- or six-field crontab expression.
+    """Build an APScheduler trigger for a five- or six-field crontab expression.
+
+    Usually a single ``CronTrigger``. When both ``day`` and ``day_of_week`` are
+    restricted, crontab fires on a day matching either field, so the result is
+    an ``OrTrigger`` of one ``CronTrigger`` per day field.
 
     Raises ``ValueError`` when the field count, a field value, or the timezone
     is invalid, so callers reject a schedule before it is stored.
     """
+    from apscheduler.triggers.combining import OrTrigger
     from apscheduler.triggers.cron import CronTrigger
 
     parts = cron.split()
@@ -113,15 +130,22 @@ def build_cron_trigger(cron: str, timezone: str | None) -> Any:
         raise ValueError(f"{CRON_FIELD_COUNT_ERROR}: {cron!r}")
 
     try:
-        return CronTrigger(
-            second=second,
-            minute=minute,
-            hour=hour,
-            day=day,
-            month=month,
-            day_of_week=day_of_week_names(day_of_week),
-            timezone=timezone,
-        )
+        weekdays = day_of_week_names(day_of_week)
+        shared = {
+            "second": second,
+            "minute": minute,
+            "hour": hour,
+            "month": month,
+            "timezone": timezone,
+        }
+        if _restricts_days(day) and _restricts_days(day_of_week):
+            return OrTrigger(
+                [
+                    CronTrigger(day=day, day_of_week="*", **shared),
+                    CronTrigger(day="*", day_of_week=weekdays, **shared),
+                ]
+            )
+        return CronTrigger(day=day, day_of_week=weekdays, **shared)
     except (ValueError, TypeError, KeyError) as exc:
         raise ValueError(f"invalid cron expression or timezone: {exc}") from exc
 
